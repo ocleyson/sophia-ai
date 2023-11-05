@@ -30,6 +30,13 @@ import {
 import { TextLoader } from "langchain/document_loaders/fs/text";
 import { CSVLoader } from "langchain/document_loaders/fs/csv";
 
+const memory = new BufferMemory({
+  memoryKey: "chatHistory",
+  inputKey: "question",
+  outputKey: "text",
+  returnMessages: true,
+});
+
 const serializeChatHistory = (chatHistory: Array<BaseMessage>): string =>
     chatHistory
     .map((chatMessage) => {
@@ -45,13 +52,6 @@ const serializeChatHistory = (chatHistory: Array<BaseMessage>): string =>
 
 async function initializeChat() {
     console.log(chalk.red('Carregando dados...'));
-
-    const memory = new BufferMemory({
-        memoryKey: "chatHistory",
-        inputKey: "question",
-        outputKey: "text",
-        returnMessages: true,
-      });
 
     const model = new ChatOpenAI({
         openAIApiKey: process.env.OPENAI_API_KEY,
@@ -160,11 +160,15 @@ async function handleUserInput(input: string, customChain: RunnableSequence<{ qu
         question = input;
     }
 
-    answer = await customChain.invoke({
-      question,
-    });
-
-    console.log(chalk.green('Resposta: ', answer.result));
+    try {
+      answer = await customChain.invoke({
+        question,
+      });
+  
+      console.log(chalk.green('Resposta: ', answer.result));
+    } catch (e) {   
+      console.log(chalk.red('Error: ', e));
+    }
 }
 
 async function startChat() {
@@ -179,7 +183,13 @@ async function startChat() {
         const questionsFileName = await rl.question('Enter the question or file name: ');
 
         if (questionsFileName.toLowerCase() === 'exit') {
+            await memory.clear();
             rl.close();
+            console.log(chalk.red('Chat closed!'))
+        } else if (questionsFileName.toLowerCase() === 'clearmemory') {
+            await memory.clear();
+            console.log(chalk.red('Memory cleared!'))
+            getUserQuestion();
         } else {
             await handleUserInput(questionsFileName, customChain);
             getUserQuestion();
