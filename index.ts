@@ -22,6 +22,14 @@ import { LLMChain } from "langchain/chains";
 import chalk from "chalk";
 import { BaseMessage } from "langchain/schema";
 
+import { DirectoryLoader } from "langchain/document_loaders/fs/directory";
+import {
+  JSONLoader,
+  JSONLinesLoader,
+} from "langchain/document_loaders/fs/json";
+import { TextLoader } from "langchain/document_loaders/fs/text";
+import { CSVLoader } from "langchain/document_loaders/fs/csv";
+
 const serializeChatHistory = (chatHistory: Array<BaseMessage>): string =>
     chatHistory
     .map((chatMessage) => {
@@ -35,7 +43,7 @@ const serializeChatHistory = (chatHistory: Array<BaseMessage>): string =>
     })
     .join("\n");
 
-async function initializeChat(dataFile: string) {
+async function initializeChat() {
     console.log(chalk.red('Carregando dados...'));
 
     const memory = new BufferMemory({
@@ -47,17 +55,27 @@ async function initializeChat(dataFile: string) {
 
     const model = new ChatOpenAI({
         openAIApiKey: process.env.OPENAI_API_KEY,
+        modelName: 'gpt-3.5-turbo',
     });
 
-    const pdfLoader = new PDFLoader(`data/knowledge/${dataFile}.pdf`);
+    const directoryLoader = new DirectoryLoader(
+      "data/knowledge",
+      {
+        ".json": (path) => new JSONLoader(path, "/texts"),
+        ".jsonl": (path) => new JSONLinesLoader(path, "/html"),
+        ".txt": (path) => new TextLoader(path),
+        ".csv": (path) => new CSVLoader(path, "text"),
+        ".pdf": (path) => new PDFLoader(path),
+      }
+    );
 
-    const pdfOutput = await pdfLoader.load();
+    const directoryOutput = await directoryLoader.load();
 
     const splitter = new RecursiveCharacterTextSplitter();
 
-    const pdfSplit = await splitter.splitDocuments(pdfOutput);
+    const docs = await splitter.splitDocuments(directoryOutput);
 
-    const vectorStore = await HNSWLib.fromDocuments(pdfSplit, new OpenAIEmbeddings());
+    const vectorStore = await HNSWLib.fromDocuments(docs, new OpenAIEmbeddings());
 
     const vectorStoreRetriever = vectorStore.asRetriever();
 
@@ -138,15 +156,13 @@ async function handleUserInput(input: string, customChain: RunnableSequence<{ qu
 
     try {
         question = fs.readFileSync(`data/questions/${input}.txt`, "utf8");
-        answer = await customChain.invoke({
-            question,
-        });
     } catch (e) {
         question = input;
-        answer = await customChain.invoke({
-            question,
-        });
     }
+
+    answer = await customChain.invoke({
+      question,
+    });
 
     console.log(chalk.green('Resposta: ', answer.result));
 }
@@ -157,9 +173,7 @@ async function startChat() {
         output,
     });
 
-    const dataFileName = await rl.question('Enter data file name: ');
-
-    const customChain = await initializeChat(dataFileName);
+    const customChain = await initializeChat();
 
     async function getUserQuestion() {
         const questionsFileName = await rl.question('Enter the question or file name: ');
