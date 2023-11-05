@@ -17,9 +17,10 @@ import readline from 'node:readline/promises';
 import * as fs from "fs";
 import { stdin as input, stdout as output } from 'node:process';
 import { BufferMemory } from "langchain/memory";
-import { BaseMessage } from "langchain/dist/schema";
 import { Document } from "langchain/document";
 import { LLMChain } from "langchain/chains";
+import chalk from "chalk";
+import { BaseMessage } from "langchain/schema";
 
 const serializeChatHistory = (chatHistory: Array<BaseMessage>): string =>
     chatHistory
@@ -35,7 +36,7 @@ const serializeChatHistory = (chatHistory: Array<BaseMessage>): string =>
     .join("\n");
 
 async function initializeChat(dataFile: string) {
-    console.log('Carregando dados...')
+    console.log(chalk.red('Carregando dados...'));
 
     const memory = new BufferMemory({
         memoryKey: "chatHistory",
@@ -126,7 +127,7 @@ async function initializeChat(dataFile: string) {
         performQuestionAnswering,
     ]);
 
-    console.log('Dados carregados!')
+    console.log(chalk.red('Dados carregados!'));
 
     return chain;
 }
@@ -147,7 +148,7 @@ async function handleUserInput(input: string, customChain: RunnableSequence<{ qu
         });
     }
 
-    console.log('Resposta: ', answer.result);
+    console.log(chalk.green('Resposta: ', answer.result));
 }
 
 async function startChat() {
