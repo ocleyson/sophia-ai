@@ -10,17 +10,39 @@ import {
     SystemMessagePromptTemplate,
 } from "langchain/prompts";
 import {
-    RunnablePassthrough,
     RunnableSequence,
 } from "langchain/schema/runnable";
 import { formatDocumentsAsString } from "langchain/util/document";
-import { StringOutputParser } from "langchain/schema/output_parser";
 import readline from 'node:readline/promises';
 import * as fs from "fs";
 import { stdin as input, stdout as output } from 'node:process';
+import { BufferMemory } from "langchain/memory";
+import { BaseMessage } from "langchain/dist/schema";
+import { Document } from "langchain/document";
+import { LLMChain } from "langchain/chains";
+
+const serializeChatHistory = (chatHistory: Array<BaseMessage>): string =>
+    chatHistory
+    .map((chatMessage) => {
+      if (chatMessage._getType() === "human") {
+        return `Human: ${chatMessage.content}`;
+      } else if (chatMessage._getType() === "ai") {
+        return `Assistant: ${chatMessage.content}`;
+      } else {
+        return `${chatMessage.content}`;
+      }
+    })
+    .join("\n");
 
 async function initializeChat(dataFile: string) {
     console.log('Carregando dados...')
+
+    const memory = new BufferMemory({
+        memoryKey: "chatHistory",
+        inputKey: "question",
+        outputKey: "text",
+        returnMessages: true,
+      });
 
     const model = new ChatOpenAI({
         openAIApiKey: process.env.OPENAI_API_KEY,
@@ -37,12 +59,14 @@ async function initializeChat(dataFile: string) {
     const vectorStore = await HNSWLib.fromDocuments(pdfSplit, new OpenAIEmbeddings());
 
     const vectorStoreRetriever = vectorStore.asRetriever();
-    
 
     const SYSTEM_TEMPLATE = `Use as seguintes partes do contexto para responder à pergunta no final.
     Se você não sabe a resposta, apenas diga que não sabe, não tente inventar uma resposta.
     ----------------
-    {context}`;
+    CONTEXTO: {context}
+    ----------------
+    HISTÓRICO: {chatHistory}
+    `;
 
     const messages = [
         SystemMessagePromptTemplate.fromTemplate(SYSTEM_TEMPLATE),
@@ -51,14 +75,55 @@ async function initializeChat(dataFile: string) {
 
     const prompt = ChatPromptTemplate.fromMessages(messages);
 
+    const slowerChain = new LLMChain({
+        llm: model,
+        prompt,
+    });
+
+    const performQuestionAnswering = async (input: {
+        question: string;
+        chatHistory: Array<BaseMessage> | null;
+        context: Array<Document>;
+      }): Promise<{ result: string; sourceDocuments: Array<Document> }> => {
+        let newQuestion = input.question;
+        
+        const serializedDocs = formatDocumentsAsString(input.context);
+        const chatHistoryString = input.chatHistory
+          ? serializeChatHistory(input.chatHistory)
+          : null;
+      
+        const response = await slowerChain.invoke({
+          chatHistory: chatHistoryString ?? "",
+          context: serializedDocs,
+          question: newQuestion,
+        });
+      
+        await memory.saveContext(
+          {
+            question: input.question,
+          },
+          {
+            text: response.text,
+          }
+        );
+      
+        return {
+          result: response.text,
+          sourceDocuments: input.context,
+        };
+      };
+
     const chain = RunnableSequence.from([
         {
-            context: vectorStoreRetriever.pipe(formatDocumentsAsString),
-            question: new RunnablePassthrough(),
+            question: (input: { question: string; }) => input.question,
+            chatHistory: async () => {
+                const savedMemory = await memory.loadMemoryVariables({});
+                const hasHistory = savedMemory.chatHistory.length > 0;
+                return hasHistory ? savedMemory.chatHistory : null;
+            },
+            context: async (input: { question: string }) => vectorStoreRetriever.getRelevantDocuments(input.question),
         },
-        prompt,
-        model,
-        new StringOutputParser(),
+        performQuestionAnswering,
     ]);
 
     console.log('Dados carregados!')
@@ -66,17 +131,23 @@ async function initializeChat(dataFile: string) {
     return chain;
 }
 
-async function handleUserInput(input: string, customChain: RunnableSequence<any, string>) {
+async function handleUserInput(input: string, customChain: RunnableSequence<{ question: string }, { result: string; sourceDocuments: Array<Document>; }>) {
+    let answer;
+    let question;
 
     try {
-        const text = fs.readFileSync(`data/questions/${input}.txt`, "utf8");
-
-        const answer = await customChain.invoke(text);
-
-        console.log('Resposta: ', answer);
+        question = fs.readFileSync(`data/questions/${input}.txt`, "utf8");
+        answer = await customChain.invoke({
+            question,
+        });
     } catch (e) {
-        console.log('error: ', e);
+        question = input;
+        answer = await customChain.invoke({
+            question,
+        });
     }
+
+    console.log('Resposta: ', answer.result);
 }
 
 async function startChat() {
@@ -90,7 +161,7 @@ async function startChat() {
     const customChain = await initializeChat(dataFileName);
 
     async function getUserQuestion() {
-        const questionsFileName = await rl.question('Enter questions txt file name: ');
+        const questionsFileName = await rl.question('Enter the question or file name: ');
 
         if (questionsFileName.toLowerCase() === 'exit') {
             rl.close();
