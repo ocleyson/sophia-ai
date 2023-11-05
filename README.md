@@ -2,10 +2,11 @@
 
 ## Installation
 ```bash
-    npm install
+npm install
 ```
 
 ## Add local data
+- create .env file in the root of the project using .env.example as a template
 - create a folder called data in the root of the project
 - create data/knowledge/example.pdf and data/questions/example.txt files
 
